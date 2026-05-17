@@ -223,7 +223,8 @@ See `gemma4_rico_finetune.ipynb`. Key choices:
 | Steps                 | 800 (smoke run)                                 |
 | Optimiser             | adamw_8bit, lr 1e-4, cosine, weight decay 0.01  |
 | Batch                 | 16 per device × 8 grad-accum = 128 effective    |
-| Tracking              | ClearML (`project=gemma4`)                      |
+| Tracking              | ClearML 2.1.7 (`project=gemma4`)                |
+| Hardware              | Google Colab — 1× NVIDIA RTX PRO 6000 Blackwell (96 GB), 48 vCPU, 177 GB RAM, CUDA 13.0 |
 
 A non-obvious gotcha you'll hit if you adapt this notebook:
 **mixing image + text-only samples in one batch breaks Gemma 4's
