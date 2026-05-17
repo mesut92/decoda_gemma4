@@ -136,6 +136,8 @@ curl -X POST http://localhost:2222/chat \
 
 ## Fine-tuning results
 
+![Training summary](assets/train_summary.png)
+
 Numbers below come from `gemma4_rico_eval.ipynb` on `gemma4_e2b_rico_adapter`
 — 100 RICO test screens (5 refs each) and 50 OASST validation chains.
 Base = the same E2B model with the LoRA disabled via
@@ -208,6 +210,8 @@ the levers are:
 ## Training
 
 See `gemma4_rico_finetune.ipynb`. Key choices:
+
+![Training loss](assets/train_loss.png)
 
 | Setting               | Value                                           |
 |-----------------------|-------------------------------------------------|
