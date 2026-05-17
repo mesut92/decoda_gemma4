@@ -1,10 +1,13 @@
 # gemma4-rico
 
-Fine-tuned **Gemma 4 E2B** for **decoda**, a mobile app that analyses
-**screenshots and user conversations**. The model is trained on a mix of:
+Fine-tuned **Gemma 4 E2B** for **decoda** — a mobile app that reads a
+message you received (pasted text or a screenshot of a chat thread) and
+returns several different interpretations side by side: a Direct Reader,
+an Empath, a Risk Spotter, a Mentor, and any custom perspective the user
+defines. The model is trained on a mix of:
 
-- [`rootsautomation/RICO-Screen2Words`](https://huggingface.co/datasets/rootsautomation/RICO-Screen2Words) — 22k mobile-app screenshots with captions (vision grounding).
-- [`OpenAssistant/oasst1`](https://huggingface.co/datasets/OpenAssistant/oasst1) — multi-turn human conversations (general chat ability).
+- [`rootsautomation/RICO-Screen2Words`](https://huggingface.co/datasets/rootsautomation/RICO-Screen2Words) — 22k mobile-app screenshots with captions (screenshot reading: parse the content of a chat/email screenshot the user attaches).
+- [`OpenAssistant/oasst1`](https://huggingface.co/datasets/OpenAssistant/oasst1) — multi-turn human conversations (conversational nuance: each perspective has to speak in its own voice).
 
 The trained adapter (`gemma4_e2b_rico_adapter`, ~145 MB) sits on top of
 `unsloth/gemma-4-E2B-it` and fits comfortably on a single 24 GB GPU
@@ -15,67 +18,79 @@ The trained adapter (`gemma4_e2b_rico_adapter`, ~145 MB) sits on top of
 ## Datasets
 
 Two datasets are mixed at a **3 : 1 RICO : OASST** ratio. The split is
-deliberate: each dataset teaches one of decoda's two surfaces.
+deliberate: each dataset teaches one of the two capabilities decoda needs
+— read what's on a screenshot, and interpret a human message with
+register-aware nuance.
 
-### RICO-Screen2Words (vision)
+### RICO-Screen2Words (screenshot reading)
 
 - **What it is.** 22,417 Android-app screenshots paired with 5 short
   human-written captions each (≈112k caption samples total). The dataset
   was originally introduced in *Screen2Words: Automatic Mobile UI
   Summarization with Multimodal Learning* (Wang et al., UIST 2021).
-- **Why it fits decoda.** RICO screens are real, in-the-wild mobile UIs —
-  settings pages, signup flows, media players, e-commerce, productivity.
-  This is exactly the visual distribution a user-submitted screenshot in
-  decoda will come from. The captions are *function-oriented*
-  ("page displaying the settings", "screen for ordering a ride"), which
-  is the register decoda needs for screen summaries — not photo-style
-  captions like "a phone with a colorful screen".
+- **Why it fits decoda.** decoda's primary image input is *a screenshot
+  of a conversation* — iMessage, WhatsApp, Slack, email. RICO is the only
+  large open dataset that covers the real visual distribution of phone
+  screens at scale, including messaging threads, email previews, and
+  group-chat layouts. Its captions are *function-oriented* ("messaging
+  thread between two contacts", "email reply screen") rather than
+  photo-style, which is the register decoda needs from the first stage
+  of its pipeline — parse the screenshot, then hand the parsed content
+  to each perspective. Without this, the base model burns tokens on
+  irrelevant visual description ("a phone with a colourful screen").
 - **What we use.** All five reference captions per screen become five
   training samples for that screen. Splits are deduped by `screenId`, so
   no screen appears in both train and test.
 
-### OpenAssistant/oasst1 (chat)
+### OpenAssistant/oasst1 (conversational nuance)
 
 - **What it is.** ~84k human-written messages organised into multi-turn
   conversation trees across 35 languages, with quality rankings.
   Apache 2.0 licensed, safe for commercial use.
-- **Why it fits decoda.** RICO captions alone train a model into a clipped
-  caption register ("page displaying X") that's poor at follow-up
-  questions like "what can the user do on this screen?". Mixing in OASST
-  preserves general conversational ability so the "messages" half of
-  decoda's UX feels natural.
+- **Why it fits decoda.** Each decoda perspective (Direct Reader, Empath,
+  Risk Spotter, Mentor, custom voices) has to speak in its own register
+  while staying grounded in the same message. RICO captions alone push
+  the model into a clipped caption voice ("messaging thread between two
+  users") that can't do "what's underneath this" or "what should I
+  reply". OASST preserves the conversational depth and multilingual
+  coverage the perspectives need; the multi-turn tree structure also
+  trains the model to maintain a coherent voice across follow-up
+  questions ("why did you read it that way?").
 - **What we use.** We walk OASST's parent-id tree and keep only
   rank-0 assistant leaves (best-of-siblings). OASST samples carry no
   system prompt and no image, so the model learns to switch between
-  "UI assistant" mode (image + UI system prompt present) and "general
-  chat" mode (plain text) based on context.
+  "screenshot reader" mode (image present) and "perspective interpreter"
+  mode (plain text, perspective-specific system prompt) based on
+  context.
 
 ### Impact on decoda
 
 decoda has two input surfaces, and the dataset mix maps to them directly:
 
-| User action in decoda                      | Backend path           | Trained by    |
-|--------------------------------------------|------------------------|---------------|
-| Uploads a screenshot, asks "what is this?" | vision (Unsloth)       | RICO captions |
-| Asks a follow-up about a previous screen   | vision (multi-turn)    | OASST + RICO  |
-| Sends a plain text message                 | ollama (text GGUF)     | OASST         |
+| User action in decoda                                        | Backend path           | Trained by    |
+|--------------------------------------------------------------|------------------------|---------------|
+| Attaches a screenshot of a chat thread to interpret          | vision (Unsloth)       | RICO + OASST  |
+| Asks a follow-up about a previously read message             | vision (multi-turn)    | OASST + RICO  |
+| Pastes the message text directly and triggers N perspectives | ollama (text GGUF)     | OASST         |
 
 Concretely the finetune gives decoda three things the base
 `unsloth/gemma-4-E2B-it` doesn't:
 
-1. **Mobile-UI grounding.** The base model describes screenshots in a
-   verbose photo-caption style. After RICO training, decoda's screenshot
-   handler returns the tight functional summary the UI surface expects
-   ("page displaying trending news", "settings screen for notifications").
-2. **Register switching.** Same model, two voices. With an image attached
-   and the UI system prompt it acts as a screen analyst; with a plain
-   text user message it falls back to conversational chat. This is what
-   lets one adapter serve both decoda surfaces from a single backend.
+1. **Screenshot grounding.** The base model describes screenshots in a
+   verbose photo-caption style. After RICO training, decoda's vision
+   stage returns the tight functional summary the rest of the pipeline
+   expects ("messaging thread; last message from A reads: …"), so each
+   perspective operates on parsed content instead of pixels.
+2. **Register switching.** Same model, two modes. With an image
+   attached it acts as a screenshot reader; with a perspective-specific
+   system prompt and plain text, it produces the in-voice interpretation
+   that perspective is meant to give. This is what lets one adapter
+   power every perspective from a single backend.
 3. **Reduced template leakage.** The base model occasionally emits an
    internal `thought\n` prefix before its answer — a chat-template
-   artifact that would show up raw in decoda's UI. The finetune cleans
-   this up because every training assistant turn ends with the proper
-   end-of-turn marker.
+   artifact that would show up raw inside a perspective card in
+   decoda's UI. The finetune cleans this up because every training
+   assistant turn ends with the proper end-of-turn marker.
 
 ---
 
@@ -104,12 +119,14 @@ mobile client stays unchanged whether or not an image is sent.
 ### Why Ollama for serving the text path
 
 [Ollama](https://ollama.com) handles the no-image branch of the proxy. The
-text path is by far the more frequent one (every plain user message in
-decoda lands here), so it's worth keeping cheap and warm:
+text path is by far the more frequent one — every perspective decoda
+renders for a pasted message is a text-path call, and a single user
+action can fan out into six or more of them — so it's worth keeping
+cheap and warm:
 
 - **Quantized GGUF, small footprint.** The exported `unsloth.Q4_K_M.gguf` is ~3 GB and shares the 4090 with the vision backend without pushing it over budget. The full fp16 model would not fit alongside the multimodal weights.
-- **`Modelfile.docker.rico` pins the chat template and system prompt.** Ollama applies the exact `gemma-4` template + decoda system prompt used at training time, so the text path doesn't drift from how the model was trained — no client-side prompt assembly needed.
-- **One-line model load.** The `ollama-init` sidecar runs `ollama create gemma4-rico -f Modelfile.docker.rico` once at startup; after that the model is hot and `/api/generate` and `/api/chat` answer in <100 ms for short replies.
+- **`Modelfile.docker.rico` pins the chat template and system prompt.** Ollama applies the exact `gemma-4` template + decoda system prompt used at training time, so the text path doesn't drift from how the model was trained — no client-side prompt assembly needed. Per-perspective system prompts are layered on top per request.
+- **One-line model load.** The `ollama-init` sidecar runs `ollama create gemma4-rico -f Modelfile.docker.rico` once at startup; after that the model is hot and `/api/generate` and `/api/chat` answer in <100 ms for short replies — important when one user message triggers six perspective generations.
 - **Standard HTTP API.** The proxy talks to `http://ollama:11434/api/chat` over plain JSON — no SDK, no GPU code in the proxy container, and easy to swap for a different quant or model by editing the Modelfile.
 
 Ollama doesn't serve the vision path because Gemma-4 image support in
@@ -134,17 +151,17 @@ docker compose up --build
 curl http://localhost:2222/health
 ```
 
-Test the **text** path (routes to Ollama):
+Test the **text** path (routes to Ollama — one perspective reading a pasted message):
 ```bash
 curl -X POST http://localhost:2222/chat \
-  -F 'payload={"messages":[{"role":"user","content":"Summarise screen-recording apps in two sentences."}],"max_tokens":100}'
+  -F 'payload={"messages":[{"role":"system","content":"You are the Empath. Read the message below and describe what the sender might be feeling underneath."},{"role":"user","content":"My manager just wrote: \"let'\''s discuss this in our 1:1.\""}],"max_tokens":120}'
 ```
 
-Test the **vision** path (routes to Unsloth):
+Test the **vision** path (routes to Unsloth — read a screenshot of a chat thread):
 ```bash
 curl -X POST http://localhost:2222/chat \
-  -F 'payload={"messages":[{"role":"user","content":"Describe what this screen does."}],"max_tokens":80}' \
-  -F 'image=@/path/to/screenshot.png'
+  -F 'payload={"messages":[{"role":"user","content":"Parse this chat screenshot and summarise the last message."}],"max_tokens":120}' \
+  -F 'image=@/path/to/chat_screenshot.png'
 ```
 
 ---
@@ -171,8 +188,9 @@ the delta isolates the finetune's contribution.
   describer of screens — there's less headroom for the finetune to
   capture in n-gram overlap than there is in a larger model.
 - OASST ROUGE-L is essentially flat (+0.14), which is the **point** of
-  including OASST in the mix: chat ability didn't regress while we
-  pulled the model toward mobile-UI captions.
+  including OASST in the mix: conversational nuance — the thing each
+  decoda perspective relies on — didn't regress while we pulled the
+  model toward screenshot reading.
 - The *qualitative* shift is bigger than BLEU/ROUGE suggests. The
   finetune consistently produces tighter, more decisive descriptions —
   see the samples below. RICO's gold captions are extremely terse
@@ -193,7 +211,7 @@ FT  : This screen is the homepage of BuzzFeed, featuring trending
       articles, a cookbook section, and various quizzes.
 ```
 
-An OASST chat triple showing chat ability is preserved:
+An OASST chat triple showing conversational nuance is preserved — this is the same capability decoda relies on for each perspective's voice:
 
 ```
 USER: In what situations is Selenium a better choice?
@@ -254,7 +272,7 @@ regression.
 LoRA on Gemma-4 E2B viable inside a single Colab notebook. Concretely:
 
 - **4-bit QLoRA out of the box.** `FastVisionModel.from_pretrained(..., load_in_4bit=True)` drops the base from ~10 GB fp16 to ~3 GB, leaving plenty of headroom on the 96 GB Blackwell for batch 16 × grad-accum 8 with vision tokens attached.
-- **Vision layers are trainable.** Setting `finetune_vision_layers=True` on `FastVisionModel.get_peft_model` is the one-line difference between adapting the language head only and actually pulling the vision tower toward mobile UIs — the RICO BLEU/ROUGE delta only shows up with this on.
+- **Vision layers are trainable.** Setting `finetune_vision_layers=True` on `FastVisionModel.get_peft_model` is the one-line difference between adapting the language head only and actually pulling the vision tower toward mobile screenshots — the RICO BLEU/ROUGE delta only shows up with this on.
 - **Patched kernels, ~2× faster steps.** Unsloth's fused attention / RoPE / cross-entropy kernels meant 800 steps finished in a single Colab session instead of timing out.
 - **First-class GGUF export.** `model.save_pretrained_gguf(..., quantization_method="q4_k_m")` in `export_gguf.py` is what produces the `unsloth.Q4_K_M.gguf` that Ollama then loads — no separate llama.cpp build dance.
 
@@ -314,7 +332,8 @@ used — mobile clients don't need changes.
   ```json
   {
     "messages": [
-      {"role": "user", "content": "Describe this screen."}
+      {"role": "system", "content": "You are the Risk Spotter. Flag traps and escalation cues in the message below."},
+      {"role": "user", "content": "My landlord just wrote: \"we should talk about the lease.\""}
     ],
     "stream": false,
     "temperature": 0.7,
@@ -323,20 +342,21 @@ used — mobile clients don't need changes.
   }
   ```
 - `image` (File, optional): when present, the request is routed to the
-  vision backend and the image is attached to the last user message
-  internally.
+  vision backend and the image (e.g. a screenshot of a chat thread) is
+  attached to the last user message internally.
 
 Returns `{"response": "..."}` or an SSE stream when `stream: true`:
 ```
-data: {"message": "page displaying"}
-data: {"message": " the settings"}
+data: {"message": "Watch for"}
+data: {"message": " an open-ended"}
 data: {"is_message_completed": true}
 ```
 
 ### `POST /generate` (JSON)
-Text-only single-prompt completion, always routed to Ollama:
+Text-only single-prompt completion, always routed to Ollama. Used by
+decoda to fan one pasted message out into per-perspective completions:
 ```json
-{ "prompt": "Summarise this app screen.", "max_tokens": 100 }
+{ "prompt": "[Empath perspective] My friend just said 'ok' to my long apology. What might they be feeling?", "max_tokens": 120 }
 ```
 
 ### `GET /health`
