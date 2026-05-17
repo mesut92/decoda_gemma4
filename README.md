@@ -101,6 +101,21 @@ Concretely the finetune gives decoda three things the base
 The proxy preserves a single API shape (`/chat`, `/generate`, `/health`) so the
 mobile client stays unchanged whether or not an image is sent.
 
+### Why Ollama for serving the text path
+
+[Ollama](https://ollama.com) handles the no-image branch of the proxy. The
+text path is by far the more frequent one (every plain user message in
+decoda lands here), so it's worth keeping cheap and warm:
+
+- **Quantized GGUF, small footprint.** The exported `unsloth.Q4_K_M.gguf` is ~3 GB and shares the 4090 with the vision backend without pushing it over budget. The full fp16 model would not fit alongside the multimodal weights.
+- **`Modelfile.docker.rico` pins the chat template and system prompt.** Ollama applies the exact `gemma-4` template + decoda system prompt used at training time, so the text path doesn't drift from how the model was trained — no client-side prompt assembly needed.
+- **One-line model load.** The `ollama-init` sidecar runs `ollama create gemma4-rico -f Modelfile.docker.rico` once at startup; after that the model is hot and `/api/generate` and `/api/chat` answer in <100 ms for short replies.
+- **Standard HTTP API.** The proxy talks to `http://ollama:11434/api/chat` over plain JSON — no SDK, no GPU code in the proxy container, and easy to swap for a different quant or model by editing the Modelfile.
+
+Ollama doesn't serve the vision path because Gemma-4 image support in
+llama.cpp / Ollama still needs an `mmproj` projector file that
+`save_pretrained_gguf` doesn't reliably produce — see Notes below.
+
 ---
 
 ## Quick start
@@ -232,6 +247,16 @@ processor.** It enforces `len(images) == len(text)` per batch. The
 notebook attaches a 32×32 placeholder image to OASST samples to satisfy
 the check. ~256 vision tokens wasted per OASST sample, no measurable
 regression.
+
+### Why Unsloth for fine-tuning
+
+[Unsloth](https://github.com/unslothai/unsloth) is what makes a vision
+LoRA on Gemma-4 E2B viable inside a single Colab notebook. Concretely:
+
+- **4-bit QLoRA out of the box.** `FastVisionModel.from_pretrained(..., load_in_4bit=True)` drops the base from ~10 GB fp16 to ~3 GB, leaving plenty of headroom on the 96 GB Blackwell for batch 16 × grad-accum 8 with vision tokens attached.
+- **Vision layers are trainable.** Setting `finetune_vision_layers=True` on `FastVisionModel.get_peft_model` is the one-line difference between adapting the language head only and actually pulling the vision tower toward mobile UIs — the RICO BLEU/ROUGE delta only shows up with this on.
+- **Patched kernels, ~2× faster steps.** Unsloth's fused attention / RoPE / cross-entropy kernels meant 800 steps finished in a single Colab session instead of timing out.
+- **First-class GGUF export.** `model.save_pretrained_gguf(..., quantization_method="q4_k_m")` in `export_gguf.py` is what produces the `unsloth.Q4_K_M.gguf` that Ollama then loads — no separate llama.cpp build dance.
 
 ---
 
