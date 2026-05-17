@@ -1,0 +1,9 @@
+unsloth>=2026.4
+unsloth_zoo>=2026.4
+transformers>=4.50.0
+trl>=0.14.0
+datasets>=3.2.0
+peft>=0.14.0
+accelerate>=1.0.0
+bitsandbytes>=0.45.0
+torch

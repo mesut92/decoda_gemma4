@@ -1,0 +1,95 @@
+services:
+  # ---------------------------------------------------------------------
+  # Ollama: serves the GGUF (text-only) at port 11434.
+  # ---------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    container_name: gemma4_ollama
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  # One-shot: creates the `gemma4-rico` model from the GGUF on first boot.
+  ollama-init:
+    image: ollama/ollama:latest
+    container_name: gemma4_ollama_init
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      - OLLAMA_HOST=ollama:11434
+    volumes:
+      - ./Modelfile.docker.rico:/Modelfile:ro
+      - ./gemma4_e2b_rico_gguf:/gguf:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >
+        if ollama list | grep -q '^gemma4-rico'; then
+          echo "gemma4-rico already loaded";
+        else
+          echo "creating gemma4-rico from /Modelfile";
+          ollama create gemma4-rico -f /Modelfile;
+        fi
+    restart: "no"
+
+  # ---------------------------------------------------------------------
+  # Vision backend: Unsloth-direct adapter load, real Gemma-4 vision pass.
+  # ---------------------------------------------------------------------
+  vision:
+    build:
+      context: ./api
+      dockerfile: Dockerfile.vision
+    container_name: gemma4_vision
+    restart: unless-stopped
+    volumes:
+      - ./gemma4_e2b_rico_adapter:/adapter:ro
+    environment:
+      - ADAPTER_PATH=/adapter
+      - MAX_SEQ_LENGTH=2048
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; urllib.request.urlopen('http://localhost:8000/health',timeout=3); sys.exit(0)\" || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 180s
+
+  # ---------------------------------------------------------------------
+  # Proxy: routes /chat by image-presence -> vision or ollama.
+  # ---------------------------------------------------------------------
+  api:
+    build: ./api
+    container_name: gemma4_api
+    restart: unless-stopped
+    ports:
+      - "2222:8000"
+    environment:
+      - OLLAMA_URL=http://ollama:11434
+      - VISION_URL=http://vision:8000
+      - OLLAMA_MODEL=gemma4-rico
+    depends_on:
+      ollama-init:
+        condition: service_completed_successfully
+      vision:
+        condition: service_started
+
+volumes:
+  ollama_data:
