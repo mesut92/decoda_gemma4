@@ -3,8 +3,12 @@
 Fine-tuned **Gemma 4 E2B** for **decoda** — a mobile app that reads a
 message you received (pasted text or a screenshot of a chat thread) and
 returns several different interpretations side by side: a Direct Reader,
-an Empath, a Risk Spotter, a Mentor, and any custom perspective the user
-defines. The model is trained on a mix of:
+an Empath, a Risk Spotter, a Mentor, plus two more built-in voices, and
+**unlimited custom perspectives the user defines themselves** (name,
+tone, role, freeform notes). Every user-defined voice is a first-class
+perspective alongside the built-in ones — the model has to handle
+arbitrary system prompts well, not just the six it shipped with. The
+model is trained on a mix of:
 
 - [`rootsautomation/RICO-Screen2Words`](https://huggingface.co/datasets/rootsautomation/RICO-Screen2Words) — 22k mobile-app screenshots with captions (screenshot reading: parse the content of a chat/email screenshot the user attaches).
 - [`OpenAssistant/oasst1`](https://huggingface.co/datasets/OpenAssistant/oasst1) — multi-turn human conversations (conversational nuance: each perspective has to speak in its own voice).
@@ -47,15 +51,19 @@ register-aware nuance.
 - **What it is.** ~84k human-written messages organised into multi-turn
   conversation trees across 35 languages, with quality rankings.
   Apache 2.0 licensed, safe for commercial use.
-- **Why it fits decoda.** Each decoda perspective (Direct Reader, Empath,
-  Risk Spotter, Mentor, custom voices) has to speak in its own register
-  while staying grounded in the same message. RICO captions alone push
-  the model into a clipped caption voice ("messaging thread between two
-  users") that can't do "what's underneath this" or "what should I
-  reply". OASST preserves the conversational depth and multilingual
-  coverage the perspectives need; the multi-turn tree structure also
-  trains the model to maintain a coherent voice across follow-up
-  questions ("why did you read it that way?").
+- **Why it fits decoda.** Each decoda perspective — the six built-ins
+  *and any user-defined voice* — has to speak in its own register while
+  staying grounded in the same message. Because custom perspectives are
+  unlimited and user-authored ("translate sarcasm explicitly", "tell me
+  if I'm overreacting", "what would a native speaker hear in this?"),
+  the model needs to follow arbitrary system prompts faithfully, not
+  just six fixed ones. RICO captions alone push the model into a clipped
+  caption voice ("messaging thread between two users") that can't do
+  "what's underneath this" or "what should I reply", and won't bend to a
+  user-authored voice at all. OASST is what preserves that flexibility:
+  its multilingual, multi-turn, instruction-following distribution is
+  exactly the prior decoda relies on so a user-defined perspective lands
+  in the right register on the first try.
 - **What we use.** We walk OASST's parent-id tree and keep only
   rank-0 assistant leaves (best-of-siblings). OASST samples carry no
   system prompt and no image, so the model learns to switch between
@@ -71,7 +79,8 @@ decoda has two input surfaces, and the dataset mix maps to them directly:
 |--------------------------------------------------------------|------------------------|---------------|
 | Attaches a screenshot of a chat thread to interpret          | vision (Unsloth)       | RICO + OASST  |
 | Asks a follow-up about a previously read message             | vision (multi-turn)    | OASST + RICO  |
-| Pastes the message text directly and triggers N perspectives | ollama (text GGUF)     | OASST         |
+| Pastes the message text and fans out across N perspectives   | ollama (text GGUF)     | OASST         |
+| Creates a *new* custom perspective and re-runs the message   | ollama (text GGUF)     | OASST         |
 
 Concretely the finetune gives decoda three things the base
 `unsloth/gemma-4-E2B-it` doesn't:
