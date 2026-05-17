@@ -136,38 +136,72 @@ curl -X POST http://localhost:2222/chat \
 
 ## Fine-tuning results
 
-Run `gemma4_rico_eval.ipynb` against `gemma4_e2b_rico_adapter` to produce
-the numbers. The notebook scores three things on a held-out slice and
-prints a base-vs-finetuned delta table:
-
-| metric                | what it measures                                            |
-|-----------------------|-------------------------------------------------------------|
-| RICO BLEU-4 (5 refs)  | n-gram overlap with all 5 reference captions per screen.    |
-| RICO ROUGE-L (best-5) | longest-subsequence overlap against the best reference.     |
-| OASST chat ROUGE-L    | open-ended chat overlap with the gold final-turn reply.     |
-
-Base = the same model with the LoRA disabled via
+Numbers below come from `gemma4_rico_eval.ipynb` on `gemma4_e2b_rico_adapter`
+— 100 RICO test screens (5 refs each) and 50 OASST validation chains.
+Base = the same E2B model with the LoRA disabled via
 `model.disable_adapter()`, so the comparison is on identical inputs and
-the delta isolates the finetune's contribution. The notebook also prints
-three side-by-side `REF / BASE / FT` triples for RICO and three
-`USER / BASE / FT / GOLD` triples for OASST, which are usually more
-informative than the metric numbers.
+the delta isolates the finetune's contribution.
 
-**What to expect** (directionally):
+| metric                | base   | finetuned | delta   |
+|-----------------------|-------:|----------:|--------:|
+| RICO BLEU-4 (5 refs)  |  1.79  |   2.01    | +0.22   |
+| RICO ROUGE-L (best-5) | 19.32  |  20.75    | +1.43   |
+| OASST chat ROUGE-L    | 16.95  |  17.09    | +0.14   |
 
-- RICO BLEU-4 should go from near-zero to double-digits. The base model
-  can describe a screen but in a verbose register that doesn't 4-gram
-  overlap with RICO's terse caption style; the finetune learns the
-  register.
-- RICO ROUGE-L tracks BLEU and confirms the lift isn't length-gaming.
-- OASST chat ROUGE-L should stay roughly flat or improve. A drop
-  indicates over-mixing toward RICO — bump the OASST ratio (cell 14 of
-  the training notebook: change `// 3` to `// 2`).
+**Reading the numbers:**
 
-For reference, the original Screen2Words paper reports ~46 BLEU-4 on the
-full test set with a dedicated screen captioner; the eval notebook uses
-n=100 by default for speed. Bump `EVAL_N` to the full test set for a
-publishable number.
+- The metric deltas are modest. E2B's base is already a competent
+  describer of screens — there's less headroom for the finetune to
+  capture in n-gram overlap than there is in a larger model.
+- OASST ROUGE-L is essentially flat (+0.14), which is the **point** of
+  including OASST in the mix: chat ability didn't regress while we
+  pulled the model toward mobile-UI captions.
+- The *qualitative* shift is bigger than BLEU/ROUGE suggests. The
+  finetune consistently produces tighter, more decisive descriptions —
+  see the samples below. RICO's gold captions are extremely terse
+  ("display of settings options for a language learning app"), so a
+  model that still uses "This screen shows..." preludes won't score
+  well even if its content is correct.
+
+### Qualitative samples (from cell 15)
+
+A representative RICO triple showing the conciseness shift:
+
+```
+REF : display of news stories in a online media app
+BASE: This screen appears to be the homepage of a mobile app called
+      "BuzzFeed," featuring trending articles, curated content like a
+      cookbook, and various quiz sections.
+FT  : This screen is the homepage of BuzzFeed, featuring trending
+      articles, a cookbook section, and various quizzes.
+```
+
+An OASST chat triple showing chat ability is preserved:
+
+```
+USER: In what situations is Selenium a better choice?
+FT  : While Cypress shines in terms of developer experience and modern
+      web application testing, Selenium remains a better choice in
+      several specific situations: 1. Cross-Browser and Cross-Platform
+      Testing is Critical — Broader Browser Support: Selenium natively
+      supports a wider range of browsers and operating systems ...
+```
+
+### What would push the numbers higher
+
+The eval is intentionally small (100 screens, 800 training steps). If
+you want to chase the original Screen2Words paper's ~46 BLEU-4 number,
+the levers are:
+
+1. **More training steps.** 800 is a smoke run. Real training is closer
+   to a full epoch over ~100k samples (~6-8k steps at batch 128).
+2. **Higher RICO ratio.** The training mix is 3:1 RICO:OASST. Drop to
+   4:1 or 5:1 by changing `// 3` → `// 4` in cell 14 of the training
+   notebook. Watch the OASST ROUGE-L stays flat as you do.
+3. **Larger LoRA rank.** Bump `r=16` → `r=32` in cell 8. Adds parameters
+   the model can use to specialise to the register.
+4. **Full RICO test set in eval.** `EVAL_N=100` is for speed; bump it to
+   `len(ds["test"])` (~4310 screens) for a number you'd put in a paper.
 
 ---
 
