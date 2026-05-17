@@ -55,6 +55,8 @@ services:
     restart: unless-stopped
     volumes:
       - ./gemma4_e2b_rico_adapter:/adapter:ro
+      - hf_cache:/root/.cache/huggingface           # <-- add this
+
     environment:
       - ADAPTER_PATH=/adapter
       - MAX_SEQ_LENGTH=2048
@@ -93,3 +95,4 @@ services:
 
 volumes:
   ollama_data:
+  hf_cache:                                         # <-- and this
